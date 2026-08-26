@@ -1,105 +1,69 @@
-# NeuroPredict — AI-Powered Predictive AIOps Platform
+# NeuroPredict - AI-Powered Predictive AIOps Platform
 
-NeuroPredict is an end-to-end predictive AIOps system for infrastructure telemetry.
+NeuroPredict is an end-to-end predictive AIOps platform that uses Transformer-based time-series forecasting to anticipate infrastructure behavior, detect abnormal deviations, and automatically create ServiceNow incidents.
 
-Pipeline:
-1. Download real AWS CloudWatch CPU telemetry from the Numenta Anomaly Benchmark (NAB).
-2. Validate, clean, scale, and window the time series.
-3. Train a Transformer-based next-step forecaster.
-4. Compare it with a naive persistence baseline.
-5. Convert forecast residuals into anomaly scores.
-6. Evaluate forecasting and anomaly-detection performance.
-7. Serve inference through FastAPI.
-8. Provide a ServiceNow Table API adapter for incident creation.
-9. Include Docker and GitHub Actions CI scaffolding.
+The system is designed around a practical AIOps workflow:
+
+**Telemetry -> Forecast -> Residual Analysis -> Anomaly Detection -> Incident Automation**
+
+---
+
+## Why NeuroPredict?
+
+Traditional infrastructure monitoring often reacts after a metric crosses a static threshold.
+
+NeuroPredict takes a different approach:
+
+1. Learn the normal temporal behavior of infrastructure telemetry.
+2. Forecast the next expected metric value.
+3. Compare the prediction with the observed value.
+4. Convert the forecast error into an interpretable anomaly score.
+5. Automatically create a ServiceNow incident when the deviation is significant.
+
+This makes the system useful for **predictive monitoring and automated IT operations** rather than simple threshold-based alerting.
+
+---
 
 ## Architecture
 
 ```text
-AWS CloudWatch telemetry
-        |
-        v
- Data validation
-        |
-        v
- Normal-window filtering
-        |
-        v
- Sliding sequences
-        |
-        v
- Transformer forecaster
-        |
-        v
- Forecast residual / anomaly score
-        |
-        +------> FastAPI inference
-        |
-        +------> ServiceNow incident adapter
-```
-
-## Dataset
-
-This project uses:
-`realAWSCloudwatch/ec2_cpu_utilization_53ea38.csv`
-
-from the Numenta Anomaly Benchmark. NAB documents its realAWSCloudwatch
-directory as real AWS server metrics collected through Amazon CloudWatch.
-
-The data is downloaded at runtime and is not committed to Git.
-
-## Run locally
-
-Recommended Python: 3.11 or 3.12.
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-python scripts/download_data.py
-python -m src.neuropredict.train
-python -m src.neuropredict.evaluate
-uvicorn src.neuropredict.api:app --reload
-```
-
-API docs:
-`http://127.0.0.1:8000/docs`
-
-## ServiceNow
-
-Set these environment variables before using the adapter:
-
-```text
-SERVICENOW_INSTANCE
-SERVICENOW_USER
-SERVICENOW_PASSWORD
-SERVICENOW_TABLE
-```
-
-Credentials must never be committed.
-
-## Engineering decisions
-
-- Transformer forecasting models temporal dependencies.
-- Naive persistence is retained as a baseline.
-- Known anomaly windows are excluded from the normal training region.
-- Forecast residuals provide an interpretable anomaly signal.
-- FastAPI separates model serving from training.
-- Docker and CI improve reproducibility.
-
-## Roadmap
-
-- Multivariate CPU/network/disk telemetry
-- Probabilistic forecasting intervals
-- MLflow/model registry
-- AWS SageMaker training and deployment
-- Prometheus-based monitoring and drift detection
-- Asynchronous ServiceNow incident creation
-- Production dashboard
-
-## Data attribution
-
-Numenta Anomaly Benchmark:
-https://github.com/numenta/NAB
-
-See the upstream repository for dataset and license details.
+                    Real Infrastructure Telemetry
+                              |
+                              v
+                    Data Validation & Cleaning
+                              |
+                              v
+                    Train / Validation / Test
+                              |
+                              v
+                    Normal-Window Filtering
+                              |
+                              v
+                     Sliding Time Windows
+                              |
+                              v
+                  Transformer Time-Series Model
+                              |
+                              v
+                     Next-Step Forecast
+                              |
+                              v
+                 +------------+-------------+
+                 |                          |
+                 v                          v
+          Forecast Evaluation        Residual Analysis
+                                           |
+                                           v
+                                    Anomaly Score
+                                           |
+                                           v
+                                    Anomaly Decision
+                                           |
+                                           v
+                                      FastAPI API
+                                           |
+                                           v
+                              ServiceNow Table API
+                                           |
+                                           v
+                                  Incident Created

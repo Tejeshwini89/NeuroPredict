@@ -18,7 +18,8 @@ NeuroPredict takes a different approach:
 2. Forecast the next expected metric value.
 3. Compare the prediction with the observed value.
 4. Convert the forecast error into an interpretable anomaly score.
-5. Automatically create a ServiceNow incident when the deviation is significant.
+5. Apply persistence-based anomaly detection.
+6. Automatically create a ServiceNow incident when a persistent anomaly is confirmed.
 
 This makes the system useful for **predictive monitoring and automated IT operations** rather than simple threshold-based alerting.
 
@@ -55,6 +56,9 @@ This makes the system useful for **predictive monitoring and automated IT operat
                                            |
                                            v
                                     Anomaly Score
+                                           |
+                                           v
+                              Persistence Detection
                                            |
                                            v
                                     Anomaly Decision

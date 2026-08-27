@@ -83,17 +83,24 @@ def test_predict_persistent_anomaly_is_detected():
     assert first_data["anomaly"] is False
     assert first_data["consecutive_anomalies"] == 1
 
-    second_response = client.post(
-        "/predict",
-        json=payload,
-    )
+    persistence = first_data["persistence"]
 
-    assert second_response.status_code == 200
+    assert persistence is not None
+    assert persistence >= 1
 
-    second_data = second_response.json()
+    last_data = first_data
 
-    assert second_data["anomaly"] is True
-    assert second_data["consecutive_anomalies"] == 2
+    for _ in range(persistence - 1):
+        response = client.post(
+            "/predict",
+            json=payload,
+        )
+
+        assert response.status_code == 200
+        last_data = response.json()
+
+    assert last_data["anomaly"] is True
+    assert last_data["consecutive_anomalies"] == persistence
 
 
 def test_predict_anomaly_creates_mocked_servicenow_incident():
@@ -123,21 +130,31 @@ def test_predict_anomaly_creates_mocked_servicenow_incident():
         )
 
         assert first_response.status_code == 200
-        assert first_response.json()["anomaly"] is False
-        assert first_response.json()["incident_created"] is False
 
-        second_response = client.post(
-            "/predict",
-            json=payload,
-        )
+        first_data = first_response.json()
 
-    assert second_response.status_code == 200
+        assert first_data["anomaly"] is False
+        assert first_data["incident_created"] is False
 
-    data = second_response.json()
+        persistence = first_data["persistence"]
 
-    assert data["anomaly"] is True
-    assert data["incident_created"] is True
-    assert data["incident_number"] == "INC-MOCK-0001"
-    assert data["incident_error"] is None
+        assert persistence is not None
+        assert persistence >= 1
+
+        last_data = first_data
+
+        for _ in range(persistence - 1):
+            response = client.post(
+                "/predict",
+                json=payload,
+            )
+
+            assert response.status_code == 200
+            last_data = response.json()
+
+    assert last_data["anomaly"] is True
+    assert last_data["incident_created"] is True
+    assert last_data["incident_number"] == "INC-MOCK-0001"
+    assert last_data["incident_error"] is None
 
     mock_client.create_incident.assert_called_once()

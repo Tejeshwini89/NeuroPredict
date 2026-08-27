@@ -7,6 +7,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -14,5 +15,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install -r requirements.txt
-      - run: pytest -q
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download dataset
+        run: python scripts/download_data.py
+
+      - name: Train model
+        run: python -m src.neuropredict.train
+
+      - name: Evaluate model
+        run: python -m src.neuropredict.evaluate
+
+      - name: Run tests
+        run: pytest -q

@@ -16,3 +16,5 @@ model:
 
 anomaly:
   threshold_quantile: 0.995
+  persistence: 1
+  max_validation_fpr: 0.02

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from .config import config
+from .detector import PersistenceDetector
 from .model import TransformerForecaster
 from .servicenow import ServiceNowClient
 
@@ -20,20 +23,25 @@ EVAL_PATH = ROOT / "artifacts" / "evaluation.json"
 
 app = FastAPI(
     title="NeuroPredict API",
-    version="0.2.0",
-    description="Transformer-based predictive AIOps inference and ServiceNow incident automation API.",
+    version="0.4.0",
+    description=(
+        "Transformer-based predictive AIOps inference, "
+        "stateful anomaly detection, and ServiceNow "
+        "incident automation API."
+    ),
 )
 
 
 _model = None
 _scaler = None
-_threshold = None
+_detector = None
+_detector_config = None
 
 
 class PredictionRequest(BaseModel):
     values: list[float] = Field(
         min_length=48,
-        description="Latest 48 raw telemetry values.",
+        description="Latest telemetry values. The last 48 values are used.",
     )
 
     observed_next_value: float | None = Field(
@@ -43,15 +51,24 @@ class PredictionRequest(BaseModel):
 
     create_incident: bool = Field(
         default=False,
-        description="Create a ServiceNow incident when an anomaly is detected.",
+        description=(
+            "Create a ServiceNow incident when a "
+            "persistent anomaly is confirmed."
+        ),
     )
 
 
 class PredictionResponse(BaseModel):
     prediction: float
+
     residual: float | None = None
     anomaly_score: float | None = None
     anomaly: bool
+
+    threshold: float | None = None
+    persistence: int | None = None
+    score_window: int | None = None
+    consecutive_anomalies: int | None = None
 
     incident_created: bool = False
     incident_number: str | None = None
@@ -59,7 +76,10 @@ class PredictionResponse(BaseModel):
 
 
 def get_components():
-    global _model, _scaler, _threshold
+    global _model
+    global _scaler
+    global _detector
+    global _detector_config
 
     if not MODEL_PATH.exists() or not SCALER_PATH.exists():
         raise HTTPException(
@@ -67,8 +87,17 @@ def get_components():
             detail="Model artifacts missing. Run training first.",
         )
 
+    # --------------------------------------------------
+    # Load model
+    # --------------------------------------------------
+
     if _model is None:
-        _model = TransformerForecaster()
+        _model = TransformerForecaster(
+            d_model=int(config["model"]["d_model"]),
+            nhead=int(config["model"]["nhead"]),
+            num_layers=int(config["model"]["num_layers"]),
+            dropout=float(config["model"]["dropout"]),
+        )
 
         _model.load_state_dict(
             torch.load(
@@ -79,6 +108,10 @@ def get_components():
 
         _model.eval()
 
+    # --------------------------------------------------
+    # Load scaler
+    # --------------------------------------------------
+
     if _scaler is None:
         _scaler = torch.load(
             SCALER_PATH,
@@ -86,29 +119,96 @@ def get_components():
             weights_only=False,
         )
 
-    if _threshold is None and EVAL_PATH.exists():
-        _threshold = float(
-            json.loads(
-                EVAL_PATH.read_text()
-            )["anomaly_threshold"]
+    # --------------------------------------------------
+    # Load selected detector configuration
+    # --------------------------------------------------
+
+    if _detector_config is None:
+
+        if not EVAL_PATH.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Evaluation results missing. "
+                    "Run evaluation before starting inference."
+                ),
+            )
+
+        evaluation = json.loads(
+            EVAL_PATH.read_text(
+                encoding="utf-8"
+            )
         )
 
-    return _model, _scaler, _threshold
+        required_keys = [
+            "selected_threshold",
+            "selected_persistence",
+            "selected_score_window",
+        ]
+
+        missing_keys = [
+            key
+            for key in required_keys
+            if key not in evaluation
+        ]
+
+        if missing_keys:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Evaluation results are missing required "
+                    f"detector configuration: {missing_keys}"
+                ),
+            )
+
+        _detector_config = {
+            "threshold": float(
+                evaluation["selected_threshold"]
+            ),
+            "persistence": int(
+                evaluation["selected_persistence"]
+            ),
+            "score_window": int(
+                evaluation["selected_score_window"]
+            ),
+        }
+
+    # --------------------------------------------------
+    # Initialize stateful detector
+    # --------------------------------------------------
+
+    if _detector is None:
+        _detector = PersistenceDetector(
+            threshold=_detector_config["threshold"],
+            persistence=_detector_config["persistence"],
+        )
+
+    return (
+        _model,
+        _scaler,
+        _detector,
+        _detector_config,
+    )
 
 
 @app.get("/health")
 def health():
+    model_ready = (
+        MODEL_PATH.exists()
+        and SCALER_PATH.exists()
+    )
+
+    evaluation_ready = EVAL_PATH.exists()
+
     return {
         "status": "ok",
-        "model_ready": (
-            MODEL_PATH.exists()
-            and SCALER_PATH.exists()
-        ),
+        "model_ready": model_ready,
+        "evaluation_ready": evaluation_ready,
         "servicenow_configured": all(
             [
-                "SERVICENOW_INSTANCE" in __import__("os").environ,
-                "SERVICENOW_USER" in __import__("os").environ,
-                "SERVICENOW_PASSWORD" in __import__("os").environ,
+                "SERVICENOW_INSTANCE" in os.environ,
+                "SERVICENOW_USER" in os.environ,
+                "SERVICENOW_PASSWORD" in os.environ,
             ]
         ),
     }
@@ -120,16 +220,44 @@ def health():
 )
 def predict(request: PredictionRequest):
 
-    model, scaler, threshold = get_components()
+    (
+        model,
+        scaler,
+        detector,
+        detector_config,
+    ) = get_components()
 
-    mean = float(scaler["mean"])
-    scale = float(scaler["scale"])
+    mean = float(
+        scaler["mean"]
+    )
+
+    scale = float(
+        scaler["scale"]
+    )
+
+    threshold = float(
+        detector_config["threshold"]
+    )
+
+    persistence = int(
+        detector_config["persistence"]
+    )
+
+    score_window = int(
+        detector_config["score_window"]
+    )
+
+    sequence_length = int(
+        config["model"]["sequence_length"]
+    )
 
     # --------------------------------------------------
     # Scale latest telemetry
     # --------------------------------------------------
 
-    latest_values = request.values[-48:]
+    latest_values = request.values[
+        -sequence_length:
+    ]
 
     scaled = [
         (value - mean) / scale
@@ -163,10 +291,16 @@ def predict(request: PredictionRequest):
         return PredictionResponse(
             prediction=prediction,
             anomaly=False,
+            threshold=threshold,
+            persistence=persistence,
+            score_window=score_window,
+            consecutive_anomalies=(
+                detector.consecutive_anomalies
+            ),
         )
 
     # --------------------------------------------------
-    # Residual anomaly detection
+    # Residual anomaly score
     # --------------------------------------------------
 
     residual = abs(
@@ -178,9 +312,12 @@ def predict(request: PredictionRequest):
         residual / max(scale, 1e-8)
     )
 
-    anomaly = (
-        threshold is not None
-        and anomaly_score >= threshold
+    # --------------------------------------------------
+    # Stateful persistence detection
+    # --------------------------------------------------
+
+    anomaly = detector.update(
+        anomaly_score
     )
 
     # --------------------------------------------------
@@ -210,14 +347,27 @@ def predict(request: PredictionRequest):
 
             description = (
                 "NeuroPredict predictive AIOps alert.\n\n"
-                f"Predicted CPU value: {prediction:.4f}\n"
-                f"Observed CPU value: {request.observed_next_value:.4f}\n"
-                f"Residual: {residual:.4f}\n"
-                f"Anomaly score: {anomaly_score:.4f}\n"
-                f"Detection threshold: {threshold:.4f}\n"
+                f"Predicted CPU value: "
+                f"{prediction:.4f}\n"
+                f"Observed CPU value: "
+                f"{request.observed_next_value:.4f}\n"
+                f"Residual: "
+                f"{residual:.4f}\n"
+                f"Anomaly score: "
+                f"{anomaly_score:.4f}\n"
+                f"Detection threshold: "
+                f"{threshold:.4f}\n"
+                f"Persistence requirement: "
+                f"{persistence}\n"
+                f"Consecutive anomalies: "
+                f"{detector.consecutive_anomalies}\n"
+                f"Score window: "
+                f"{score_window}\n"
                 f"Model: TransformerForecaster\n"
-                f"Sequence length: 48\n"
-                f"Dataset: ec2_cpu_utilization_53ea38\n"
+                f"Sequence length: "
+                f"{sequence_length}\n"
+                f"Dataset: "
+                f"{config['dataset']['file']}\n"
             )
 
             result = client.create_incident(
@@ -245,6 +395,12 @@ def predict(request: PredictionRequest):
         residual=residual,
         anomaly_score=anomaly_score,
         anomaly=anomaly,
+        threshold=threshold,
+        persistence=persistence,
+        score_window=score_window,
+        consecutive_anomalies=(
+            detector.consecutive_anomalies
+        ),
         incident_created=incident_created,
         incident_number=incident_number,
         incident_error=incident_error,

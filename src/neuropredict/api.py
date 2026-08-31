@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -14,12 +15,23 @@ from .model import TransformerForecaster
 from .servicenow import ServiceNowClient
 
 
+# --------------------------------------------------
+# Load environment variables
+# --------------------------------------------------
+
 ROOT = Path(__file__).resolve().parents[2]
+
+load_dotenv(ROOT / ".env")
+
 
 MODEL_PATH = ROOT / "artifacts" / "transformer_forecaster.pt"
 SCALER_PATH = ROOT / "artifacts" / "scaler.pt"
 EVAL_PATH = ROOT / "artifacts" / "evaluation.json"
 
+
+# --------------------------------------------------
+# FastAPI application
+# --------------------------------------------------
 
 app = FastAPI(
     title="NeuroPredict API",
@@ -32,11 +44,19 @@ app = FastAPI(
 )
 
 
+# --------------------------------------------------
+# Runtime state
+# --------------------------------------------------
+
 _model = None
 _scaler = None
 _detector = None
 _detector_config = None
 
+
+# --------------------------------------------------
+# Request / response models
+# --------------------------------------------------
 
 class PredictionRequest(BaseModel):
     values: list[float] = Field(
@@ -74,6 +94,10 @@ class PredictionResponse(BaseModel):
     incident_number: str | None = None
     incident_error: str | None = None
 
+
+# --------------------------------------------------
+# Load model, scaler, and detector
+# --------------------------------------------------
 
 def get_components():
     global _model
@@ -191,6 +215,10 @@ def get_components():
     )
 
 
+# --------------------------------------------------
+# Health endpoint
+# --------------------------------------------------
+
 @app.get("/health")
 def health():
     model_ready = (
@@ -213,6 +241,10 @@ def health():
         ),
     }
 
+
+# --------------------------------------------------
+# Prediction endpoint
+# --------------------------------------------------
 
 @app.post(
     "/predict",

@@ -112,6 +112,8 @@ def train_model(
 
 
 def main():
+    np.random.seed(42)
+    torch.manual_seed(42)
     dataset_config = config["dataset"]
     model_config = config["model"]
 
